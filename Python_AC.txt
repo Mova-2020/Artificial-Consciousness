@@ -1,0 +1,139 @@
+"""
+Artificial Consciousness Simulation Demo
+========================================
+This script implements *two* coupling mechanisms described in
+Vakulenko & Zhokhin (2025) for modelling the emergence of artificial
+consciousness:
+
+    1. Broadcast coupling (feed-forward of the “winner” process) – C1
+    2. Sin–arcsin phase coupling – C2
+
+For each mechanism the script:
+
+    • Simulates N independent feed‑forward neural processes
+    • Applies the selected nonlinear inter‑process coupling
+    • Records the network states over T time‑steps
+    • Visualises:
+        – Component‑wise time‑series (low‑amplitude oscillations)
+        – Power spectrum (higher harmonics 12–70 Hz equivalent)
+        – Phase portrait / strange attractor
+        – Slow decay of the attractor envelope
+
+The default hyper‑parameters are tuned for qualitative
+demonstration; feel free to experiment.
+
+---------------------------------------------------------------
+Date: 2025‑06‑14
+Language: Python 3.x (NumPy / Matplotlib)
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import List
+
+# ----------------------------- CONFIG ------------------------------
+N_PROCESSES: int = 5            # total concurrent processes  (N >> 1 possible)
+STATE_DIM: int = 32             # dimensionality of each process state
+LAYER_SIZES: List[int] = [STATE_DIM, 64, 64, STATE_DIM]  # identical topology
+T_STEPS: int = 1000             # simulation length
+DECAY: float = 0.995            # per‑step energy loss (metastability)
+COUPLING = "broadcast"         # "broadcast" or "sin_arcsin"
+LAMBDA: float = 0.25            # coupling strength for broadcast
+SEED: int = 42
+# --------------------------------------------------------------------
+
+rng = np.random.default_rng(SEED)
+
+# -------- Simple fully‑connected feed‑forward network ---------------
+class FFNN:
+    def __init__(self, layer_sizes: List[int], rng: np.random.Generator):
+        self.W = []
+        self.b = []
+        for d_in, d_out in zip(layer_sizes[:-1], layer_sizes[1:]):
+            # weights initialised with small variance to keep outputs in (−1,1)
+            self.W.append(rng.normal(0, 0.5, (d_in, d_out)))
+            self.b.append(rng.normal(0, 0.1, (d_out,)))
+
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        for W, b in zip(self.W, self.b):
+            x = np.tanh(x @ W + b)          # non‑linear activation
+        return x
+
+# ---------------------- Helper visualisation ------------------------
+def plot_time_series(state_trace: np.ndarray, proc_idx: int):
+    """Plot first component of the time‑series for a given process."""
+    plt.figure()
+    plt.title(f"Process {proc_idx+1}: time series (component 0)")
+    plt.plot(state_trace[:, 0])
+    plt.xlabel("t")
+    plt.ylabel("x[0]")
+    plt.tight_layout()
+    plt.show()
+
+def plot_power_spectrum(state_trace: np.ndarray, proc_idx: int):
+    """Compute and plot power spectrum (magnitude FFT) of component 0."""
+    yf = np.fft.rfft(state_trace[:, 0])
+    xf = np.fft.rfftfreq(state_trace.shape[0], d=1.0)
+    plt.figure()
+    plt.title(f"Process {proc_idx+1}: power spectrum of component 0")
+    plt.semilogy(xf, np.abs(yf))
+    plt.xlabel("Frequency (a.u.)")
+    plt.ylabel("|FFT|")
+    plt.tight_layout()
+    plt.show()
+
+def plot_phase_portrait(state_trace: np.ndarray, proc_idx: int, every=5):
+    """2‑D phase portrait using first two components."""
+    plt.figure()
+    plt.title(f"Process {proc_idx+1}: phase portrait (strange attractor)")
+    plt.plot(state_trace[::every, 0], state_trace[::every, 1], '.', markersize=1)
+    plt.xlabel("x[0]")
+    plt.ylabel("x[1]")
+    plt.tight_layout()
+    plt.show()
+
+# -------------------- Simulation core --------------------------------
+
+def simulate(coupling: str = COUPLING):
+    """Run simulation and return state history (T × N × D)."""
+    networks = [FFNN(LAYER_SIZES, rng) for _ in range(N_PROCESSES)]
+    # initial states uniformly in (−0.5,0.5)
+    states = rng.uniform(-0.5, 0.5, (N_PROCESSES, STATE_DIM))
+    history = np.zeros((T_STEPS, N_PROCESSES, STATE_DIM))
+
+    for t in range(T_STEPS):
+        # -------- determine winner output (process 0) ----------------
+        winner_out = networks[0].forward(states[0])
+
+        new_states = np.empty_like(states)
+        # first process evolves freely
+        new_states[0] = winner_out
+
+        if coupling == "broadcast":
+            for i in range(1, N_PROCESSES):
+                coupled_in = states[i] + LAMBDA * winner_out
+                new_states[i] = networks[i].forward(coupled_in)
+        elif coupling == "sin_arcsin":
+            # element‑wise sin‑arcsin transformation based on winner state
+            for i in range(1, N_PROCESSES):
+                phase = 2 * np.pi * i / N_PROCESSES
+                coupled_in = np.sin(np.arcsin(winner_out) - phase)
+                new_states[i] = networks[i].forward(coupled_in)
+        else:
+            raise ValueError("Unknown coupling type")
+        # energy decay → metastability & eventual fade‑out
+        states = DECAY * new_states
+        history[t] = states
+
+    return history
+
+# ----------------------------- main ----------------------------------
+if __name__ == "__main__":
+    hist = simulate(COUPLING)
+
+    # Visualise for process 1 (idx 0) and process 2 (idx 1) as examples
+    plot_time_series(hist[:, 0], proc_idx=0)
+    plot_power_spectrum(hist[:, 0], proc_idx=0)
+    plot_phase_portrait(hist[:, 1], proc_idx=1)
+
+    # Feel free to loop over processes / change COUPLING and rerun
